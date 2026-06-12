@@ -4,18 +4,16 @@ import numpy as np
 import scipy.stats as stats
 import os
 
-# 1. 声明与训练端（train_save.py）完全强一致的高级模型架构
 class ProfessionalSymmetricDCNet(nn.Module):
     def __init__(self, num_teams, embedding_dim=16, dropout_p=0.1):
         super(ProfessionalSymmetricDCNet, self).__init__()
         self.team_embedding = nn.Embedding(num_teams, embedding_dim)
 
-        # 强对齐：必须包含 nn.Dropout 层以完美复现权重字典的键值结构 (team_net.2)
         self.team_net = nn.Sequential(
             nn.Linear(embedding_dim + 3, 32),
             nn.ReLU(),
             nn.Dropout(p=dropout_p),
-            nn.Linear(32, 2)  # 输出潜在 [进攻力, 防守力]
+            nn.Linear(32, 2)
         )
         self.home_advantage = nn.Parameter(torch.tensor([0.25]))
         self.rho_net = nn.Sequential(nn.Linear(2, 8), nn.ReLU(), nn.Linear(8, 1))
@@ -23,7 +21,6 @@ class ProfessionalSymmetricDCNet(nn.Module):
     def get_team_stats(self, team_id, elo, form):
         emb = self.team_embedding(team_id)
 
-        # 强对齐：历史积分与近期状态的数值缩放尺度平衡
         normalized_elo = elo / 100.0
         normalized_form = form / 3.0
 
@@ -40,7 +37,6 @@ class ProfessionalSymmetricDCNet(nn.Module):
         log_lambda_h = h_att - a_def + h_adv_term.squeeze(1)
         log_lambda_a = a_att - h_def - h_adv_term.squeeze(1)
 
-        # 强对齐：必须施加相同的物理边界边界截断，防止推理侧数据发散
         log_lambda_h = torch.clamp(log_lambda_h, min=-3.0, max=3.0)
         log_lambda_a = torch.clamp(log_lambda_a, min=-3.0, max=3.0)
 
@@ -50,7 +46,6 @@ class ProfessionalSymmetricDCNet(nn.Module):
         return torch.stack([log_lambda_h, log_lambda_a, rho_raw], dim=1)
 
 
-# 2. 独立预测推理封装类
 class AdvancedSymmetricPredictor:
     def __init__(self, model_path='advanced_dixon_coles_model.pth'):
         if not os.path.exists(model_path):
@@ -61,11 +56,10 @@ class AdvancedSymmetricPredictor:
         self.team_to_id = checkpoint['team_to_id']
         self.latest_team_meta = checkpoint['latest_team_meta']
 
-        # 实例化重构后的全新高阶模型类
         self.model = ProfessionalSymmetricDCNet(num_teams=checkpoint['num_teams'])
         self.model.load_state_dict(
             checkpoint['checkpoint'] if 'checkpoint' in checkpoint else checkpoint['model_state_dict'])
-        self.model.eval()  # 锁定评估模式（关闭 Dropout 的随机扰动）
+        self.model.eval()
         print("模型已就绪\n")
 
     def predict_match(self, home_team, away_team, neutral=True, max_goals=5):
@@ -112,17 +106,13 @@ class AdvancedSymmetricPredictor:
         # 归一化矩阵全域概率
         prob_matrix /= np.sum(prob_matrix)
 
-        # 核心扩展：计算比分概率矩阵的【香农信息熵（Shannon Entropy）】作为爆冷潜质/不确定度量化指标
-        # 熵值越大说明概率分布越离散，潜在的不可控冷门或高分波动风险越高
         safe_probs = prob_matrix[prob_matrix > 1e-9]
         shannon_entropy = -np.sum(safe_probs * np.log2(safe_probs))
 
-        # 计算胜、平、负结局大盘概率
         home_win = np.sum(np.tril(prob_matrix, -1))
         draw = np.sum(np.diag(prob_matrix))
         away_win = np.sum(np.triu(prob_matrix, 1))
 
-        # 平铺比分并过滤排序概率前 5 名
         score_list = []
         for x in range(max_goals + 1):
             for y in range(max_goals + 1):
@@ -131,7 +121,6 @@ class AdvancedSymmetricPredictor:
         score_list.sort(key=lambda item: item[2], reverse=True)
         top_5_scores = score_list[:5]
 
-        # 结构化标准学术/博彩级报告输出
         print(f" {home_team} VS {away_team}")
         print(f" 场地: {'中立球场' if neutral else '非中立球场'}")
         print(f" Elo: {home_team}({h_meta['elo']:.1f}) | {away_team}({a_meta['elo']:.1f})")
