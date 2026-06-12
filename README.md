@@ -1,2 +1,3 @@
 # FIFA2026predictor
+在gemini的帮助下，根据kaggle上下载的男子国际足球比赛比分数据训练的足球比分预测模型，供娱乐
 
