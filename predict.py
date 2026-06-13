@@ -139,4 +139,4 @@ class AdvancedSymmetricPredictor:
 
 if __name__ == "__main__":
     predictor = AdvancedSymmetricPredictor()
-    predictor.predict_match("China", "Japan", neutral=True)
+    predictor.predict_match("United States", "Paraguay", neutral=True)

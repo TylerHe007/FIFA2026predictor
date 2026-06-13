@@ -39,8 +39,8 @@ class ProfessionalSymmetricDCNet(nn.Module):
         emb = self.team_embedding(team_id)
 
         # 数值平衡层：
-        # 1. Elo 积分除以 100 映射到 [15.0, 20.0] 区间
-        # 2. 近期近况(Form)场均进失球除以 3.0 进行压缩缩放，使其与全局 Embedding 的方差量级保持齐次
+        # Elo 积分除以 100 映射到 [15, 20.0] 区间
+        # 近期近况(Form)场均进失球除以 3.0 进行压缩缩放，使其与全局 Embedding 的方差量级保持齐次
         normalized_elo = elo / 100.0
         normalized_form = form / 3.0
 
@@ -92,7 +92,7 @@ class SymmetricFootballDataset(Dataset):
                 self.h_form[idx], self.a_form[idx], self.scores[idx], self.weights[idx])
 
 
-# 3. 稳健型 Dixon-Coles 损失函数 (增强极端情况下的数值保护)
+# 3. 稳健型 Dixon-Coles 损失函数
 class ProfessionalDixonColesLoss(nn.Module):
     def __init__(self, eps: float = 1e-7):
         super(ProfessionalDixonColesLoss, self).__init__()
@@ -129,21 +129,36 @@ class ProfessionalDixonColesLoss(nn.Module):
         return base_nll - log_tau
 
 
-# 4. 主训练流程 (引入余弦退火学习率、动态学习率调度与梯度剪切)
 def main_train():
-    csv_path = 'results.csv'
+    csv_path = 'results.xlsx'
     save_path = 'advanced_dixon_coles_model.pth'
 
-    print(">> [1/5] 加载历史国际比赛数据")
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"未在当前目录下找到数据集: {csv_path}")
+    print("加载数据")
 
-    df = pd.read_csv(csv_path)
+    if csv_path.endswith('.xlsx'):
+        df = pd.read_excel(csv_path)
+    else:
+        try:
+            df = pd.read_csv(csv_path, encoding='utf-8')
+        except UnicodeDecodeError:
+            df = pd.read_csv(csv_path, encoding='gbk')
+
     df['date'] = pd.to_datetime(df['date'])
     df = df.sort_values('date').reset_index(drop=True)
 
-    # 彻底隔离未赛与已赛行
+    df['home_score'] = pd.to_numeric(df['home_score'], errors='coerce')
+    df['away_score'] = pd.to_numeric(df['away_score'], errors='coerce')
+
     train_df = df.dropna(subset=['home_score', 'away_score']).copy()
+
+    train_df['neutral'] = (
+        train_df['neutral'].astype(str)
+        .str.upper()
+        .str.strip()
+        .map({'TRUE': 1, 'FALSE': 0, '1': 1, '0': 0, '1.0': 1, '0.0': 0})
+    )
+    train_df['neutral'] = train_df['neutral'].fillna(1).astype(int)
+
 
     print(">> [2/5] 构建全局图连通关联矩阵并序列化全图动态 Elo 积分")
     all_teams = sorted(list(set(df['home_team'].unique()).union(set(df['away_team'].unique()))))
@@ -179,7 +194,7 @@ def main_train():
         e_h = 1.0 / (10.0 ** (-dr / 400.0) + 1.0)
         sa = 1.0 if hs > as_ else (0.0 if hs < as_ else 0.5)
 
-        k = 40 if row['tournament'] == 'FIFA World Cup' else 20
+        k = 50 if row['tournament'] == 'FIFA World Cup' else 20
         g_mult = 1.0 if abs(hs - as_) <= 1 else (1.5 if abs(hs - as_) == 2 else (11.0 + abs(hs - as_)) / 8.0)
 
         elo_delta = k * g_mult * (sa - e_h)
@@ -201,7 +216,7 @@ def main_train():
     train_df['roll_a_sc'] = roll_a_sc
     train_df['roll_a_con'] = roll_a_con
 
-    # 固化历史终点线的原生浮点变量字典 (安全跨版本反序列化防报错)
+    # 固化历史终点线的原生浮点变量字典
     latest_team_meta = {}
     for team in all_teams:
         form = np.mean(team_history[team], axis=0) if team in team_history and len(team_history[team]) > 0 else [1.35,
@@ -214,8 +229,8 @@ def main_train():
     # 时序衰减及赛事、主客场复合权重优化
     max_date = train_df['date'].max()
     train_df['years_ago'] = (max_date - train_df['date']).dt.days / 365.25
-    train_df['weight_time'] = np.exp(-0.1 * train_df['years_ago'])
-    train_df['weight_tournament'] = train_df['tournament'].apply(lambda x: 2.5 if x == 'FIFA World Cup' else 1.0)
+    train_df['weight_time'] = np.exp(-0.2 * train_df['years_ago'])
+    train_df['weight_tournament'] = train_df['tournament'].apply(lambda x: 3.0 if x == 'FIFA World Cup' else 1.0)
     train_df['weight_home_away'] = train_df['neutral'].apply(lambda x: 1.0 if x else 1.1)
     train_df['sample_weight'] = train_df['weight_time'] * train_df['weight_tournament'] * train_df['weight_home_away']
 
